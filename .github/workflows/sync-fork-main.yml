@@ -17,6 +17,43 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Keep scheduled sync active
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          last_commit=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" \
+            --jq '.commit.committer.date')
+          last_epoch=$(date -u -d "$last_commit" +%s)
+          now_epoch=$(date -u +%s)
+
+          if (( now_epoch - last_epoch < 50 * 24 * 60 * 60 )); then
+            echo "No keepalive commit needed."
+            exit 0
+          fi
+
+          head_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
+            --jq '.object.sha')
+          tree_sha=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/git/commits/${head_sha}" \
+            --jq '.tree.sha')
+
+          payload=$(jq -n \
+            --arg message "chore: keep fork sync active" \
+            --arg tree "$tree_sha" \
+            --arg parent "$head_sha" \
+            '{message: $message, tree: $tree, parents: [$parent]}')
+
+          heartbeat_sha=$(printf '%s\n' "$payload" | gh api \
+            "repos/${GITHUB_REPOSITORY}/git/commits" \
+            --method POST \
+            --input - \
+            --jq '.sha')
+
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs/heads/main" \
+            --method PATCH \
+            -f sha="$heartbeat_sha" \
+            -F force=false
+
       - name: Sync with upstream
         env:
           GH_TOKEN: ${{ github.token }}
